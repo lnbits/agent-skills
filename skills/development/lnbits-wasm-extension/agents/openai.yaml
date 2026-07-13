@@ -1,0 +1,4 @@
+interface:
+  display_name: "LNbits WASM Extension Builder"
+  short_description: "Build complete, secure LNbits WASM extensions"
+  default_prompt: "Use $lnbits-wasm-extension to build a complete installable LNbits WASM extension from my product request."
