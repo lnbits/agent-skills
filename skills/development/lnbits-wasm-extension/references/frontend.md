@@ -58,6 +58,13 @@ Current bridge actions commonly include:
 | `ui.scan_qr` | Parent scanner; requires `ui.camera.scan_qr` permission/approval. |
 | `payment.subscribe` | Watch a payment hash returned by this extension’s API. |
 | `payment.unsubscribe` | Stop a subscription and clean parent resources. |
+| `navigation.replace` | Replace the route within this extension only. |
+| `navigation.open_new_tab` | Ask the user before opening an HTTP(S) URL in a new tab. |
+| `storage.session.get` / `storage.session.set` | Extension-namespaced parent session storage; keys are limited to 128 safe characters and values to 4 KiB. |
+| `websocket.subscribe` / `websocket.unsubscribe` / `websocket.send` | Subscribe, close, or send on an extension-local WebSocket; requires `websocket.subscribe`. |
+| `permissions.request` | Request supported per-user grants from an authenticated page. |
+| `permissions.request_background_payment` | Request the declared `wallet.pay_invoice_background` grant. |
+| `permissions.request_wallet_payment_watch` | Request the declared `wallet.payments.watch` grant. |
 
 Confirm action names and payloads in the selected runtime before use.
 
@@ -107,6 +114,12 @@ To match LNbits QR behavior without accessing `lnbits-qrcode`:
 
 For payment watching, subscribe only to a payment hash returned through the same extension API, handle settled/error events, tolerate duplicate settled events in UI, and unsubscribe when the dialog/page closes. UI confirmation is not the authoritative paid-state write; backend event processing is.
 
+## Extension-local WebSockets and User Grants
+
+Do not create a WebSocket directly from the sandboxed iframe. With `websocket.subscribe` declared and approved, use the bridge actions above. A subscription is scoped to this extension and an `itemId` matching `^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$`; listen for bridge event `websocket.message`, validate its JSON payload, and unsubscribe on teardown. The parent forwards client messages to other peers on the same item, so a client message is never trusted state.
+
+Use `permissions.request_background_payment` and `permissions.request_wallet_payment_watch` only from an authenticated page and only after explaining the selected wallet and action. Handle a denial as normal control flow. These grants are per user and wallet; they are not proof that another user, route, or component invocation may use the wallet.
+
 ## Frontend Verification
 
 Test at least:
@@ -119,6 +132,8 @@ Test at least:
 - public pages cannot call authenticated routes through the bridge;
 - dialog cleanup unsubscribes and unmounts local apps;
 - payment settlement updates/closes UI exactly once;
+- WebSocket subscription validates the item ID, handles close/error, and closes on teardown;
+- user-grant denial leaves payment/watch UI safe and usable;
 - clipboard/QR actions carry the correct value; and
 - errors produce a safe parent notification.
 

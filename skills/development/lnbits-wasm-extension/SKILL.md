@@ -17,7 +17,7 @@ Never guess what “current LNbits” means.
 4. Record the exact commit SHA or release version used as the target.
 5. If `lnbits/core/wasm_ext` is absent, stop: that target does not expose this WASM extension contract.
 
-Read [references/runtime-discovery.md](references/runtime-discovery.md) completely before creating files. It gives exact commands, authoritative file paths, GitHub fallbacks, and a runtime-inspection script. Runtime source wins over this skill when the contract changes.
+Read [references/runtime-discovery.md](references/runtime-discovery.md) completely before creating files. Run its inspector and read the listed source files before selecting permissions, storage calls, or bridge actions. Runtime source wins over this skill when the contract changes.
 
 ## Convert the Request Into a Contract
 
@@ -47,6 +47,8 @@ Read the references required by the requested features:
 
 - Always: [references/backend-contract.md](references/backend-contract.md), [references/frontend.md](references/frontend.md), and [references/verification.md](references/verification.md).
 - Incoming invoices, outgoing payments, or paid events: [references/payments-events.md](references/payments-events.md).
+
+Read the matching capability section before using public storage, WebSockets, or background wallet permissions. Do not infer an SDK method or browser-bridge action from a permission name.
 
 ## Required Product Repository
 

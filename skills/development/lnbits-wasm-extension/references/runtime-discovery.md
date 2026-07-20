@@ -44,6 +44,7 @@ lnbits/core/wasm_ext/api/registry.py
 lnbits/core/wasm_ext/api/host.py
 lnbits/core/wasm_ext/api/models.py
 lnbits/core/wasm_ext/api/permissions.py
+lnbits/core/wasm_ext/api/websockets.py
 lnbits/core/wasm_ext/storage/crud.py
 lnbits/core/wasm_ext/routes/api.py
 lnbits/core/wasm_ext/routes/ui.py
@@ -52,6 +53,9 @@ lnbits/core/wasm_ext/routes/assets.py
 lnbits/core/wasm_ext/wasm/events.py
 lnbits/core/wasm_ext/wasm/invoke.py
 lnbits/static/js/wasm-extension-component.js
+lnbits/core/views/extension_api.py
+lnbits/core/views/websocket_api.py
+lnbits/core/models/extensions.py
 tools/codegen/extension_sdk_typescript.py
 ```
 
@@ -94,13 +98,15 @@ Then follow the local inspection steps. If cloning is unavailable, open the repo
 | `api/host.py`, `api/utils.py` | Host behavior, auth requirement, permission per call. |
 | `api/models.py` | Request/response fields and size/range constraints. |
 | `api/permissions.py` | Accepted permission IDs and policy shapes. |
+| `api/websockets.py`, `views/websocket_api.py` | Extension websocket endpoint, channel isolation, message limits, and subscribe enforcement. |
 | `storage/crud.py` | Schema types, migration operations, owner scope, SQL conversion. |
-| `routes/api.py` | HTTP payload merge rules, route mapping, errors and limits. |
+| `routes/api.py` | HTTP payload merge rules, route mapping, owner-context resolution, errors and limits. |
 | `routes/ui.py`, `routes/security.py` | iframe route context, CSP, permissions policy. |
 | `routes/assets.py` | Exact `_lnbits` assets an iframe may load. |
 | `wasm/events.py` | Event selection, owner resolution, exact event payload. |
 | `wasm/invoke.py` | Export invocation, context and resource limits. |
-| `wasm-extension-component.js` | Browser bridge messages and parent-side behavior. |
+| `wasm-extension-component.js` | Browser bridge actions, permission prompts, session storage, navigation, and websocket lifecycle. |
+| `views/extension_api.py`, `models/extensions.py` | Per-user background-payment and wallet-payment-watch grants. |
 | `extension_sdk_typescript.py` | Generated source-language host contract. |
 
 ## Conflict Rule

@@ -48,6 +48,8 @@ Valid export visibility and route auth are separate vocabularies:
 
 An API route may invoke only a non-event export with matching public/private intent. An event export is invoked only by a declared event.
 
+For a public route that must operate on the owner of a private source row, use the selected runtime's `ownerContext`; it resolves the source row owner and invokes the component with that owner scope. It is not an authorization bypass: use it only for a route whose source ID is mapped from a path/body field and whose operation is safe for public callers.
+
 ## Routes and Payloads
 
 Configured API paths are mounted below `/api/v1/ext/<extension-id>`. UI paths are mounted below `/ext`. Static assets are served below `/ext-assets/<extension-id>`.
@@ -85,6 +87,8 @@ Common capabilities include:
 | Owner row read/list | `ext.storage.read` | Authenticated; owner scoped. |
 | Owner row create/update/delete | `ext.storage.write` | Authenticated or event with resolved owner. |
 | Allow-listed row-by-ID read | `ext.storage.read_public` | Public; policies use `table_name` and `public_fields`. |
+| Source-scoped public list/search/sort | `ext.storage.read_public` | Public; policy must also set `source_id_field`; queries may use only public fields plus that fixed source field. |
+| Public child-row append | `ext.storage.append_public` | Public; policy fixes target/source tables, source field, allowed fields, and a per-source row cap. |
 | List user wallets | `wallet.list` | Authenticated. |
 | Read wallet balance | `wallet.balance.read` | Authenticated; host checks ownership. |
 | Create incoming invoice | `wallet.create_invoice` | Authenticated; host checks wallet ownership. |
@@ -94,6 +98,10 @@ Common capabilities include:
 | Other extension API | `extension.api.request` | Authenticated; policy allow-lists extension ID and read/write access. |
 | Currency/server/Lightning helpers | `utils.basic` | Confirm each method’s auth flag in generated contract. |
 | QR camera bridge | `ui.camera.scan_qr` | UI permission with parent approval. |
+| Publish extension-local WebSocket data | `websocket.publish` | Public/auth/event; policy sets `max_messages_per_second` (1–100). |
+| Subscribe/send on an extension-local WebSocket | `websocket.subscribe` | UI bridge permission; no host import. |
+| Pay without an authenticated component context | `wallet.pay_invoice_background` | Per-user, per-wallet bridge grant with amount and destination policy. |
+| Watch a user's wallet payments | `wallet.payments.watch` | Per-user, per-wallet bridge grant. |
 
 System ID/time/log methods may require no permission; confirm the generated contract. Never request a plausible permission name that is absent from `permission_ids`.
 
@@ -101,9 +109,20 @@ Policy examples:
 
 ```json
 {"id":"ext.storage.read_public","policies":[
-  {"table_name":"records","public_fields":["id","name"]}
+  {"table_name":"records","source_id_field":"project_id","public_fields":["id","name"]}
 ]}
 ```
+
+`getPublic` remains a row-by-ID read. `getPublicPaginated` requires `sourceId`, forcibly filters by the declared `source_id_field`, and permits filters/search/sort only on public fields. Do not use public pagination as an unbounded directory/search API.
+
+```json
+{"id":"ext.storage.append_public","policies":[
+  {"table":"messages","source_table":"threads","source_id_field":"thread_id",
+   "allowed_fields":["body","display_name"],"max_rows_per_source":100}
+]}
+```
+
+The host generates the child row ID, resolves ownership from the source row, injects the source ID, and enforces the cap. Never accept `id`, the owner field, the source field, or any private/moderation field from a public append.
 
 ```json
 {"id":"wallet.create_invoice_public","policies":[
@@ -120,6 +139,12 @@ Policy examples:
 ```json
 {"id":"extension.api.request","policies":[
   {"id":"target-extension","access":["read"]}
+]}
+```
+
+```json
+{"id":"websocket.publish","policies":[
+  {"max_messages_per_second":10}
 ]}
 ```
 
@@ -177,7 +202,29 @@ Keep field definitions identical between migration and schema. Do not define `__
 
 Released migrations are immutable. Add `0002_*.json`, `0003_*.json`, and so on, and advance the schema. Do not assume rollback or arbitrary SQL operations exist.
 
-Public storage is row-by-ID and field allow-listed. It is not a public list/search/aggregation API. Design a safe projection only if the product needs one, and preserve a private authoritative record where correctness matters.
+Public storage is field allow-listed. Row-by-ID reads need `ext.storage.read_public`; source-scoped pagination additionally needs an exact `source_id_field`, and public append needs a separate allow-list/cap policy. Preserve a private authoritative record where correctness matters.
+
+## Extension-local WebSockets
+
+Use only for transient extension-local collaboration or UI updates, not authoritative writes. Add both permissions when the component publishes and the iframe subscribes:
+
+```json
+[
+  {"id":"websocket.publish","policies":[{"max_messages_per_second":10}]},
+  {"id":"websocket.subscribe"}
+]
+```
+
+The component host call is `websocket.publish({itemId, data})`; generate its exact WIT/SDK type. The iframe connects only through the parent bridge to `/api/v1/ext/ws/<extension-id>/<item-id>`, never directly. Item IDs are extension-namespaced and must match `^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$`; JSON publishes are limited to 64 KiB, clients to 8 KiB/message and 60 messages/second, and the approved publish rate is capped at 100 messages/second. Treat received client messages as untrusted and validate them in the UI/component before changing state.
+
+## Per-user Wallet Grants
+
+`wallet.pay_invoice_background` and `wallet.payments.watch` are declared in `config.json`, but use is authorized by a user through bridge actions. Background payment is enforced when the existing wallet payment host call runs without an authenticated component context; payment watch is a bridge capability. Do not request either at install time unless the product reaches its corresponding bridge action.
+
+- `permissions.request_background_payment` requests a user's wallet, positive `maxAmount`, and `destinationPolicy` (`own_wallets_only` or `external_allowed`). Background payments reject shared/non-sendable wallets and enforce the saved grant per wallet.
+- `permissions.request_wallet_payment_watch` requests one user-owned wallet. It enables the bridge's wallet-payment subscription for that wallet.
+
+Use only on authenticated UI routes, handle refusal, and make the wallet/action/limit explicit in the product UI. Read `extension_api.py`, `models/extensions.py`, and `wasm-extension-component.js` for the selected ref before constructing request payloads.
 
 ## WIT and JavaScript Components
 
