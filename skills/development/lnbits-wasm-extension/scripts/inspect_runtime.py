@@ -19,6 +19,16 @@ def git(root: Path, *args: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def model_schema(model: type[Any]) -> dict[str, Any]:
+    modern = getattr(model, "model_json_schema", None)
+    if callable(modern):
+        return modern()
+    legacy = getattr(model, "schema", None)
+    if callable(legacy):
+        return legacy()
+    raise TypeError(f"{model.__name__} does not expose a JSON schema method")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Print the authoritative LNbits WASM runtime contract as JSON."
@@ -58,7 +68,7 @@ def main() -> int:
         "root": str(root),
         "commit": git(root, "rev-parse", "HEAD"),
         "describe": git(root, "describe", "--tags", "--always", "--dirty"),
-        "config_schema": WasmExtensionConfig.schema(),
+        "config_schema": model_schema(WasmExtensionConfig),
         "host_api": extension_api_contract(),
         "permission_ids": sorted(extension_api_permission_ids()),
         "iframe_core_assets": dict(sorted(assets.items())),

@@ -4,9 +4,10 @@
 
 - Config
 - Routes and payloads
+- OpenAPI metadata
 - Host methods and permissions
 - Storage and migrations
-- WIT and JavaScript components
+- WIT and component toolchains
 - Export structure
 
 ## Config
@@ -38,7 +39,9 @@ Generate the accepted schema from the selected runtime; do not infer keys. A typ
 }
 ```
 
-Include `wasm.wit` and `wasm.world` when accepted by the target. Add `min_lnbits_version` only after identifying the first compatible release; never ship a placeholder. Use extension IDs safe for paths and WIT identifiers. The installed directory name and `config.id` must match.
+Include `wasm.wit` and `wasm.world` when accepted by the target. Add `min_lnbits_version` and `max_lnbits_version` only after establishing real compatibility boundaries; never ship placeholders. Use extension IDs safe for paths and WIT identifiers. The installed directory name and `config.id` must match.
+
+Generate the schema because accepted fields evolve. Emit only fields present in that schema, then trace each optional field to its runtime consumer; accepted or silently ignored fields do not prove behavior exists. Trace runtime-limit controls through `config.py`, `models/extensions.py`, and `services/extensions.py` before deciding whether they belong to extension config or installed-extension metadata.
 
 Valid export visibility and route auth are separate vocabularies:
 
@@ -70,6 +73,37 @@ The runtime converts unmapped query keys from snake_case to camelCase. Inspect `
 
 Use only accepted verbs from `WasmAPIRouteConfig`. Body-bearing routes accept JSON objects, not arrays or form data, and runtime request-size limits apply.
 
+## OpenAPI Metadata
+
+When the extension exposes API routes, ship field-level documentation unless the product is truly trivial. WIT proves only the export's string-in/string-out ABI; derive schemas from boundary validation, storage fields, and public response mappers.
+
+Set top-level `openapi` to an extension-relative JSON file, conventionally `wasm/openapi.json`. This is an LNbits metadata document, not a complete OpenAPI document:
+
+```json
+{
+  "schemas": {
+    "CreateRecord": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {"name": {"type": "string", "maxLength": 80}}
+    }
+  },
+  "routes": {
+    "create-record": {
+      "summary": "Create record",
+      "operationId": "exampleext_create_record",
+      "requestBody": {
+        "required": true,
+        "content": {"application/json": {"schema": {"$ref": "#/schemas/CreateRecord"}}}
+      },
+      "responses": {"200": {"description": "Extension response envelope."}}
+    }
+  }
+}
+```
+
+LNbits looks up `routes[api_routes[*].export]`; prefer that exact key. Use route-level `openapi` only when one export is mounted with different operations. Document URL parameter names such as `record_id`, while component payload schemas use their mapped names such as `recordId`. Keep `$ref` local, omit `tags` because LNbits supplies the extension tag, and provide a stable unique `operationId`. Missing/invalid metadata is logged and ignored, so verify the generated `/docs` entry instead of treating extension startup as proof.
+
 ## Host Methods and Permissions
 
 Obtain the complete method list from `scripts/inspect_runtime.py`. For each method record:
@@ -93,17 +127,19 @@ Common capabilities include:
 | Read wallet balance | `wallet.balance.read` | Authenticated; host checks ownership. |
 | Create incoming invoice | `wallet.create_invoice` | Authenticated; host checks wallet ownership. |
 | Create public incoming invoice | `wallet.create_invoice_public` | Public; policy uses `table` and `wallet_field`. |
-| Pay invoice | `wallet.pay_invoice` | Authenticated; high-risk, request only when required. |
+| Pay invoice or LNURL | Conditional; commonly `wallet.pay_invoice` or a background grant | High-risk; inspect the host method's context branches. |
 | External HTTP | `http.request` | Authenticated; policy allow-lists exact HTTPS origins. |
 | Other extension API | `extension.api.request` | Authenticated; policy allow-lists extension ID and read/write access. |
 | Currency/server/Lightning helpers | `utils.basic` | Confirm each method’s auth flag in generated contract. |
 | QR camera bridge | `ui.camera.scan_qr` | UI permission with parent approval. |
-| Publish extension-local WebSocket data | `websocket.publish` | Public/auth/event; policy sets `max_messages_per_second` (1–100). |
+| Publish extension-local WebSocket data | `websocket.publish` | Public/auth/event; inspect the policy model for its rate range. |
 | Subscribe/send on an extension-local WebSocket | `websocket.subscribe` | UI bridge permission; no host import. |
 | Pay without an authenticated component context | `wallet.pay_invoice_background` | Per-user, per-wallet bridge grant with amount and destination policy. |
 | Watch a user's wallet payments | `wallet.payments.watch` | Per-user, per-wallet bridge grant. |
 
 System ID/time/log methods may require no permission; confirm the generated contract. Never request a plausible permission name that is absent from `permission_ids`.
+
+`required_permission: null` in the generated method table means there is no unconditional decorator check. It does not prove the method is permission-free. Inspect the implementation for conditional checks; payment methods may select different grants for authenticated and background contexts.
 
 Policy examples:
 
@@ -150,9 +186,11 @@ The host generates the child row ID, resolves ownership from the source row, inj
 
 Use exact policy keys from `api/permissions.py`; similar-looking keys are not interchangeable.
 
+For outbound HTTP and cross-extension calls, also read the matching client implementation. Permission policy is only one layer; validate allowed schemes/origins, methods, access classification, headers, redirects, timeout/body limits, and response parsing against the selected runtime.
+
 ## Storage and Migrations
 
-Every table requires an `id` field. Supported field types and operations come from `storage/crud.py`. At the current contract baseline:
+Every table requires an `id` field. Derive supported field types, modifiers, and migration operations from `storage/crud.py`; common contracts include:
 
 - types: `string`, `integer`, `number`, `boolean`, `datetime`;
 - optional modifiers: `nullable`, `default`, `list`;
@@ -204,6 +242,8 @@ Released migrations are immutable. Add `0002_*.json`, `0003_*.json`, and so on, 
 
 Public storage is field allow-listed. Row-by-ID reads need `ext.storage.read_public`; source-scoped pagination additionally needs an exact `source_id_field`, and public append needs a separate allow-list/cap policy. Preserve a private authoritative record where correctness matters.
 
+Design aggregates against actual storage primitives. If the host lacks transactions, conditional inserts, uniqueness constraints, or atomic increments, do not promise a race-safe read-modify-write counter. Prefer deterministic receipt IDs plus a derived aggregate, or state the consistency/scale limit and request a missing core capability. Bound pagination and host-call counts against the selected runtime's execution, response, and invocation limits.
+
 ## Extension-local WebSockets
 
 Use only for transient extension-local collaboration or UI updates, not authoritative writes. Add both permissions when the component publishes and the iframe subscribes:
@@ -215,7 +255,7 @@ Use only for transient extension-local collaboration or UI updates, not authorit
 ]
 ```
 
-The component host call is `websocket.publish({itemId, data})`; generate its exact WIT/SDK type. The iframe connects only through the parent bridge to `/api/v1/ext/ws/<extension-id>/<item-id>`, never directly. Item IDs are extension-namespaced and must match `^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$`; JSON publishes are limited to 64 KiB, clients to 8 KiB/message and 60 messages/second, and the approved publish rate is capped at 100 messages/second. Treat received client messages as untrusted and validate them in the UI/component before changing state.
+Generate the component publish call's exact WIT/SDK type. The iframe connects only through the parent bridge to the extension-local WebSocket endpoint, never directly. Read `api/websockets.py`, `views/websocket_api.py`, and the browser bridge for the exact endpoint, item-ID grammar, payload sizes, client rate, and approved publish-rate bounds. Treat received client messages as untrusted and validate them before changing state.
 
 ## Per-user Wallet Grants
 
@@ -226,9 +266,11 @@ The component host call is `websocket.publish({itemId, data})`; generate its exa
 
 Use only on authenticated UI routes, handle refusal, and make the wallet/action/limit explicit in the product UI. Read `extension_api.py`, `models/extensions.py`, and `wasm-extension-component.js` for the selected ref before constructing request payloads.
 
-## WIT and JavaScript Components
+## WIT and Component Toolchains
 
 WIT import interfaces must match `host_interface`, kebab-case host names, request records, and response records from the generated runtime contract. Import only the interfaces used by the source. WIT record fields are kebab-case; JavaScript bindings usually expose camelCase. Confirm generated bindings rather than guessing conversions.
+
+Generated SDK/TypeScript models describe the logical host JSON contract; they are not automatically valid WIT declarations. For arbitrary objects, maps, headers, filters, or other shapes WIT cannot encode directly, inspect the runtime adapter and generated bindings for the actual transport representation. Keep that conversion in one host-adapter layer and prove it by invoking the built component.
 
 The world exports every configured function:
 
@@ -241,10 +283,12 @@ world exampleext {
 }
 ```
 
-For JavaScript, keep host bindings in `dev/src/lnbits-sdk.js` and domain exports in `dev/src/index.js`. Bundle them deterministically, then componentize:
+Use the language/toolchain the user selected. Otherwise prefer a toolchain already proven against the target runtime; JavaScript plus `jco` is one practical baseline, not a runtime requirement. For another language, generate bindings from the selected WIT and verify the resulting component against LNbits rather than translating JavaScript binding names by intuition.
+
+For JavaScript, keep host bindings in `dev/src/lnbits-sdk.js` and domain exports in `dev/src/index.js`. Pin `@bytecodealliance/jco` in `dev/package.json` and the lockfile, bundle deterministically, then invoke the local binary:
 
 ```bash
-npx --yes @bytecodealliance/jco componentize \
+./node_modules/.bin/jco componentize \
   dev/dist/index.bundle.js \
   --disable all --enable clocks --enable random --enable stdio \
   --wit wasm/lnbits-extension.wit \
@@ -252,7 +296,16 @@ npx --yes @bytecodealliance/jco componentize \
   -o wasm/module.wasm
 ```
 
-Pin the build dependency/version in the actual project lockfile for reproducible releases. Enable only WASI features the component build requires. The host capabilities still require WIT imports and approved LNbits permissions.
+Enable only WASI features the component build requires. The host capabilities still require WIT imports and approved LNbits permissions. Never make the release build depend on an unpinned network-fetched CLI.
+
+The embedded component JavaScript engine is not Node or a browser. Keep component code within the language features proven by the component toolchain. Do not use DOM APIs, `fetch`, Node modules, or Web Crypto unless the selected runtime explicitly imports an equivalent. Feature-detect optional standard methods:
+
+```js
+const normalized =
+  typeof value.normalize === 'function' ? value.normalize('NFKC') : value
+```
+
+Test the fallback branch in Node, then invoke the rebuilt component. A Node-only test can pass while the embedded engine fails.
 
 ## Export Structure
 
