@@ -30,6 +30,8 @@ Typical runtimes expose LNbits/Quasar CSS, material icons, Vue, Quasar UMD, and 
 /ext-assets/<extension-id>/<relative-static-path>
 ```
 
+Use only suffixes listed by `WASM_EXTENSION_STATIC_MIME_TYPES`; do not infer support from browser capabilities. Do not add or reference SVG unless the selected runtime explicitly serves it. Check the guarded asset route for content-sniffing or other rejection rules as well.
+
 Loading CSS/JS into the iframe creates iframe-local styles/runtime objects. It does not expose parent-registered LNbits components. If a core component is not provided as a standalone iframe asset, reproduce only the necessary behavior locally or request a core asset/API addition.
 
 ## Bridge
@@ -48,7 +50,7 @@ Connection protocol:
 
 Derive `parentOrigin` from `new URL(window.location.href).origin`; never use `*` for the connect target. Validate message type, request/subscription ID, and expected port. Do not accept window-wide messages as trusted bridge responses after the port is established.
 
-Current bridge actions commonly include:
+Bridge action families commonly include:
 
 | Action | Purpose |
 |---|---|
@@ -60,7 +62,7 @@ Current bridge actions commonly include:
 | `payment.unsubscribe` | Stop a subscription and clean parent resources. |
 | `navigation.replace` | Replace the route within this extension only. |
 | `navigation.open_new_tab` | Ask the user before opening an HTTP(S) URL in a new tab. |
-| `storage.session.get` / `storage.session.set` | Extension-namespaced parent session storage; keys are limited to 128 safe characters and values to 4 KiB. |
+| `storage.session.get` / `storage.session.set` | Extension-namespaced parent session storage; inspect the bridge for key/value limits. |
 | `websocket.subscribe` / `websocket.unsubscribe` / `websocket.send` | Subscribe, close, or send on an extension-local WebSocket; requires `websocket.subscribe`. |
 | `permissions.request` | Request supported per-user grants from an authenticated page. |
 | `permissions.request_background_payment` | Request the declared `wallet.pay_invoice_background` grant. |
@@ -84,7 +86,9 @@ Use `textContent`, DOM properties, or escaped framework children for untrusted v
 
 ## Forms and Dialogs
 
-Do not rely on native form navigation. Use an explicit click handler or prevent default and call the same action method. A submit button without a working handler is not wired.
+Do not use `<form>`, submit controls, or submit-event workflows. The iframe sandbox omits `allow-forms`, and CSP sets `form-action 'none'`. Use inert containers and explicit `type="button"` controls. A button without a working click handler is not wired.
+
+Choose one event system per page. Static HTML uses `addEventListener`; a Vue-owned tree uses Vue/Quasar `onClick`. Do not add manual listeners to nodes Vue creates.
 
 Compute validity from the actual mutable form state. Disable the primary action when invalid, loading, or already submitted. Revalidate inside the action before calling the API. Test the rendered button’s click handler, not merely the method in isolation.
 
@@ -98,6 +102,16 @@ For modal behavior, implement:
 - immediate close or clear state after successful completion when requested.
 
 Use native elements plus Quasar utility classes for small pages. Load Quasar JS and create an iframe-local app only when actual Quasar components/plugins reduce code or improve accessibility.
+
+In Vue render functions, pass component slots as the third `h()` argument:
+
+```js
+h(QCardSection, {class: 'row items-center'}, {
+  default: () => [h('span', 'Details'), h(QSpace), closeButton]
+})
+```
+
+Passing `default` inside props may silently produce an empty component. Wire `QDialog` with both `modelValue` and `onUpdate:modelValue`. Give every action `type: 'button'`, an explicit `onClick`, loading/disabled state, and a `finally` path that restores usability after failure.
 
 ## Notifications, QR, and Payment Watching
 
@@ -116,7 +130,7 @@ For payment watching, subscribe only to a payment hash returned through the same
 
 ## Extension-local WebSockets and User Grants
 
-Do not create a WebSocket directly from the sandboxed iframe. With `websocket.subscribe` declared and approved, use the bridge actions above. A subscription is scoped to this extension and an `itemId` matching `^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$`; listen for bridge event `websocket.message`, validate its JSON payload, and unsubscribe on teardown. The parent forwards client messages to other peers on the same item, so a client message is never trusted state.
+Do not create a WebSocket directly from the sandboxed iframe. With `websocket.subscribe` declared and approved, use the bridge actions above. A subscription is scoped to this extension; validate `itemId` against the selected bridge's exact rule, listen for bridge event `websocket.message`, validate its JSON payload, and unsubscribe on teardown. The parent forwards client messages to other peers on the same item, so a client message is never trusted state.
 
 Use `permissions.request_background_payment` and `permissions.request_wallet_payment_watch` only from an authenticated page and only after explaining the selected wallet and action. Handle a denial as normal control flow. These grants are per user and wallet; they are not proof that another user, route, or component invocation may use the wallet.
 
@@ -136,5 +150,7 @@ Test at least:
 - user-grant denial leaves payment/watch UI safe and usable;
 - clipboard/QR actions carry the correct value; and
 - errors produce a safe parent notification.
+
+Use [frontend-recipes.md](frontend-recipes.md) for standalone HTML, Quasar render-function, close-card, spacing, and rendered-click patterns.
 
 Browser warnings about unsupported feature-policy names or early layout are not proof of extension failure. Prioritize failed bridge responses, CSP violations, server tracebacks, and observed state.

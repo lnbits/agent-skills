@@ -47,7 +47,9 @@ Return no wallet IDs, raw payment records, hashes, preimages, or internal extra 
 
 ## Outgoing Payment
 
-`wallet.pay_invoice` is authenticated and high risk. Before calling it:
+Generate the wallet payment methods and types from the selected runtime. It may expose separate invoice and LNURL/Lightning-address payment calls, with conditional permissions for authenticated and background contexts. Read the host implementation, LNURL helper, background-payment enforcement, and generated contract before choosing a flow.
+
+For an authenticated outgoing payment, request the permission enforced by that host branch and apply these checks before calling it:
 
 - validate and decode the invoice when helpers exist;
 - enforce product-specific amount and fee limits server-side in the component;
@@ -57,6 +59,8 @@ Return no wallet IDs, raw payment records, hashes, preimages, or internal extra 
 - return only data the owner UI needs.
 
 Do not expose outgoing payment through a public export or request the permission for a product that only receives funds.
+
+For background payment, declare the runtime's background permission and obtain the per-user, per-wallet grant through the authenticated browser bridge first. Enforce the approved amount/destination policy and treat denial, revocation, or a missing grant as normal control flow. A public HTTP route must never become a generic payment trigger merely because the component can run without user context.
 
 ## Payment Tests
 
@@ -72,4 +76,6 @@ Test the paths applicable to the product:
 - current-state transition behavior for an already-issued invoice;
 - wrong owner/wallet denied;
 - outgoing amount/fee ceiling; and
+- malformed/unsupported LNURL or Lightning address and success-action handling, when used;
+- missing, denied, revoked, wrong-wallet, over-limit, or wrong-destination background grants, when used; and
 - browser subscription closes and cleans up after settlement/error/dialog close.
